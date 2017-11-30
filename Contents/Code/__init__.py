@@ -82,7 +82,7 @@ def updateDaumMovie(cate, metadata):
       html = HTML.ElementFromURL(DAUM_TV_DETAIL % metadata.id)
       metadata.title = html.xpath('//div[@class="subject_movie"]/strong')[0].text
       metadata.original_title = ''
-      metadata.rating = float(html.xpath('//div[@class="subject_movie"]/div/em')[0].text)
+      metadata.rating = float(html.xpath('//em[@class="emph_grade"]')[0].text)
       metadata.genres.clear()
       metadata.genres.add(html.xpath('//dl[@class="list_movie"]/dd[2]')[0].text)
       metadata.studio = html.xpath('//dl[@class="list_movie"]/dd[1]/em')[0].text
@@ -102,12 +102,14 @@ def updateDaumMovie(cate, metadata):
       metadata.title = match.group(1)
       metadata.year = int(match.group(2))
       metadata.original_title = html.xpath('//span[@class="txt_movie"]')[0].text
-      metadata.rating = float(html.xpath('//div[@class="subject_movie"]/div/em')[0].text)
+      metadata.rating = float(html.xpath('//em[@class="emph_grade"]')[0].text)
       # 장르
       metadata.genres.clear()
       dds = html.xpath('//dl[contains(@class, "list_movie")]/dd')
-      for genre in dds.pop(0).text.split('/'):
-          metadata.genres.add(genre)
+      genre_text = dds.pop(0).text
+      if genre_text:
+        for genre in genre_text.split('/'):
+            metadata.genres.add(genre)
       # 나라
       metadata.countries.clear()
       for country in dds.pop(0).text.split(','):
@@ -168,25 +170,49 @@ def updateDaumMovie(cate, metadata):
   producers = list()
   writers = list()
   roles = list()
+  duplicate_roles = list()
 
   if cate == 'tv':
     try:
       html = HTML.ElementFromURL(DAUM_TV_CAST % metadata.id)
-      for item in html.xpath('//a[@class="link_join"]'):
-        cast = dict()
-        cast['name'] = item.xpath('.//*[@class="tit_join"]/em/text()')[0]
-        match = Regex(u'^(.*?)( 역)?$').search(item.xpath('.//*[@class="txt_join"]/text()')[0])
-        cast['role'] = match.group(1)
-        cast['photo'] = item.xpath('.//img[@class="thumb_photo"]/@src')[0]
+      for div in html.xpath('//div[@class="movie_join movie_staff"]'):
+        tit_movie = div.xpath('.//h4[@class="tit_movie"]/text()')[0]
+        for item in div.xpath('.//a[@class="link_join"]'):
+          cast = dict()
+          cast['name'] = item.xpath('.//*[@class="tit_join"]/em/text()')[0]
+          match = Regex(u'^(.*?)( 역)?$').search(item.xpath('.//*[@class="txt_join"]/text()')[0])
+          cast_role = cast['role'] = match.group(1)
+          cast['photo'] = item.xpath('.//img[@class="thumb_photo"]/@src')[0]
+          # Log.Debug("%s : %s" % (cast['name'], cast_role))
 
-        if cast['role'] in [u'감독', u'연출']:
-          directors.append(cast)
-        elif cast['role'] == u'제작':
-          producers.append(cast)
-        elif cast['role'] in [u'극본', u'각본']:
-          writers.append(cast)
-        else:
-          roles.append(cast)
+          if tit_movie == u'출연':
+            duplicate_roles.append(cast_role)
+            role_count = duplicate_roles.count(cast_role)
+            if role_count > 1:
+              cast['role'] = "%s %d" % (cast_role, role_count)
+            roles.append(cast)
+          else:  # 제작진
+            if cast['role'] in [u'감독', u'연출']:
+              directors.append(cast)
+            elif cast['role'] in [u'제작', u'프로듀서', u'책임프로듀서']:
+              producers.append(cast)
+            elif cast['role'] in [u'극본', u'각본']:
+              writers.append(cast)
+      # for item in html.xpath('//a[@class="link_join"]'):
+      #   cast = dict()
+      #   cast['name'] = item.xpath('.//*[@class="tit_join"]/em/text()')[0]
+      #   match = Regex(u'^(.*?)( 역)?$').search(item.xpath('.//*[@class="txt_join"]/text()')[0])
+      #   cast['role'] = match.group(1)
+      #   cast['photo'] = item.xpath('.//img[@class="thumb_photo"]/@src')[0]
+      #
+      #   if cast['role'] in [u'감독', u'연출']:
+      #     directors.append(cast)
+      #   elif cast['role'] == u'제작':
+      #     producers.append(cast)
+      #   elif cast['role'] in [u'극본', u'각본']:
+      #     writers.append(cast)
+      #   else:
+      #     roles.append(cast)
     except Exception, e:
       Log.Debug(repr(e))
       pass
