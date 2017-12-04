@@ -309,8 +309,7 @@ def updateDaumMovieTv(metadata):
         meta_role.photo = role['photo']
 
   # (3) from photo page
-  url_tmpl = DAUM_TV_PHOTO if cate == 'tv' else DAUM_MOVIE_PHOTO
-  data = JSON.ObjectFromURL(url=url_tmpl % metadata.id)
+  data = JSON.ObjectFromURL(url=DAUM_TV_PHOTO % metadata.id)
   max_poster = int(Prefs['max_num_posters'])
   max_art = int(Prefs['max_num_arts'])
   idx_poster = 0
