@@ -101,7 +101,7 @@ def searchDaumMovie(results, media, lang):
   media_ids = []
 
   # 영화 검색 (메인)
-  media_name = unicodedata.normalize('NFKC', unicode(media.name)).strip()
+  media_name = unicodedata.normalize('NFC', unicode(media.name)).strip()
   media_words = media_name.split(' ') if containsHangul(media_name) else [ media_name ]
   while media_words:
     media_name = ' '.join(media_words)
@@ -124,7 +124,7 @@ def searchDaumMovie(results, media, lang):
 
   if not media_ids:
     # 영화 검색 (자동완성)
-    media_name = unicodedata.normalize('NFKC', unicode(media.name)).strip()
+    media_name = unicodedata.normalize('NFC', unicode(media.name)).strip()
     media_words = media_name.split(' ') if containsHangul(media_name) else [ media_name ]
     while media_words:
       media_name = ' '.join(media_words)
@@ -156,7 +156,7 @@ def searchDaumMovie(results, media, lang):
     results.Append(MetadataSearchResult(id=id, name=title, year=year, score=score, lang=lang))
 
 def searchDaumTV(results, media, lang):
-  media_name = unicodedata.normalize('NFKC', unicode(media.show)).strip()
+  media_name = unicodedata.normalize('NFC', unicode(media.show)).strip()
   media_year = media.year
   # if not media_year and media.filename:
   #   match = Regex('\D(\d{2})[01]\d[0-3]\d\D').search(os.path.basename(urllib.unquote(media.filename)))
@@ -227,7 +227,7 @@ def updateDaumMovie(metadata):
   try:
     data = JSON.ObjectFromURL(DAUM_MOVIE_DETAIL % metadata.id)
     metadata.title = data['movieCommon']['titleKorean']
-    metadata.title_sort = unicodedata.normalize('NFKD' if Prefs['use_title_decomposition'] else 'NFKC', metadata.title)
+    metadata.title_sort = unicodedata.normalize('NFD' if Prefs['use_title_decomposition'] else 'NFC', metadata.title)
     try: metadata.rating = float(data['movieCommon']['avgRating'])
     except: metadata.rating = None
     metadata.genres.clear()
@@ -371,7 +371,7 @@ def updateDaumTV(metadata, media):
     html = HTML.ElementFromURL(DAUM_TV_DETAIL % ('tv', urllib.quote(media.title.encode('utf8')), metadata.id))
     #metadata.title = html.xpath('//div[@class="tit_program"]/strong')[0].text
     metadata.title = media.title
-    metadata.title_sort = unicodedata.normalize('NFKD' if Prefs['use_title_decomposition'] else 'NFKC', metadata.title)
+    metadata.title_sort = unicodedata.normalize('NFD' if Prefs['use_title_decomposition'] else 'NFC', metadata.title)
     metadata.original_title = ''
     metadata.rating = None
     metadata.genres.clear()
