@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 # Daum Movie
 
-import urllib, unicodedata, os, traceback
+import urllib, unicodedata, os, time, traceback
+from Framework.exceptions import RedirectError
 
 DAUM_MOVIE_SRCH   = "https://search.daum.net/search?w=tot&q=%s&rtmaxcoll=EM1"
 # DAUM_MOVIE_SGST   = "https://dapi.kakao.com/suggest-hub/v1/search.json?service=movie-v2&cate=movie&multiple=1&q=%s"
@@ -76,7 +77,7 @@ def downloadImage(url, fetchContent=True):
   return result
 
 def originalImageUrlFromCdnUrl(url):
-  if 'daumcdn.net' in url:
+  if 'daumcdn.net' in url or 'kakaocdn.net' in url:
     url = urllib.unquote(Regex('fname=(.*)').search(url).group(1))
 
   if url.startswith('//'):
@@ -107,7 +108,7 @@ def searchDaumMovie(results, media, lang):
     Log.Debug("search: %s %s" %(media_name, media.year))
     try:
       # https://search.daum.net/search?w=tot&q=서울의%20봄&rtmaxcoll=EM1
-      html = HTML.ElementFromURL(DAUM_MOVIE_SRCH % urllib.quote(media_name.encode('utf8')))
+      html = HTML.ElementFromURL(DAUM_MOVIE_SRCH % urllib.quote(media_name.encode('utf8')), sleep=0.5)
       for em1Coll in html.xpath('//div[@id="em1Coll"]'):
         ctitle = em1Coll.xpath('.//c-header-content/c-title')[0]
         try:
@@ -255,13 +256,15 @@ def updateDaumMovie(metadata, media):
 
     # 장르
     metadata.genres.clear()
-    for genre in card.xpath(u'./c-doc-content//dt[.="장르"]/following-sibling::dd[1]')[0].text.strip().split('/'):  # 액션/어드벤처/SF
-      metadata.genres.add(genre)
+    for genres in card.xpath(u'./c-doc-content//dt[.="장르"]/following-sibling::dd[1]'):
+      for genre in genres.text.strip().split('/'):  # 액션/어드벤처/SF
+        metadata.genres.add(genre)
 
     # 국가
     metadata.countries.clear()
-    for country in card.xpath(u'./c-doc-content//dt[.="국가"]/following-sibling::dd[1]')[0].text.strip().split(', '):  # 미국, 중국
-      metadata.countries.add(country)
+    for countries in card.xpath(u'./c-doc-content//dt[.="국가"]/following-sibling::dd[1]'):
+      for country in countries.text.strip().split(', '):  # 미국, 중국
+        metadata.countries.add(country)
 
     # 줄거리
     metadata.summary = card.xpath('./c-summary')[0].text.strip()
@@ -270,7 +273,9 @@ def updateDaumMovie(metadata, media):
     for poster_url in card.xpath('./c-doc-content/c-thumb/@data-original-src'):
       poster_url = originalImageUrlFromCdnUrl(poster_url)
       if poster_url not in metadata.posters:
-        metadata.posters[poster_url] = Proxy.Preview(HTTP.Request(poster_url, cacheTime=0), sort_order = len(metadata.posters) + 1)
+        try:
+          metadata.posters[poster_url] = Proxy.Preview(HTTP.Request(poster_url, cacheTime=0), sort_order=len(metadata.posters) + 1)
+        except: pass
 
     # 개봉, 재개봉: 2016.08.24.
     for oaa in card.xpath(u'./c-doc-content//dt[.="개봉" or .="재개봉"]/following-sibling::dd[1]/span'):
@@ -388,12 +393,15 @@ def updateDaumMovie(metadata, media):
     for src in card.xpath('.//c-masonry-item/c-thumb/@data-original-src'):
       art_url = originalImageUrlFromCdnUrl(src)
       if art_url not in metadata.art:
-        try: metadata.art[art_url] = Proxy.Preview(HTTP.Request(art_url, cacheTime=0), sort_order = len(metadata.art) + 1)
-        except Exception as e: Log.Debug(repr(e))
+        try:
+          metadata.art[art_url] = Proxy.Preview(HTTP.Request(art_url, cacheTime=0, sleep=0.5), sort_order=len(metadata.art) + 1)
+        except: pass
 
   Log.Debug('Total %d posters, %d artworks' %(len(metadata.posters), len(metadata.art)))
 
 def updateDaumTV(metadata, media):
+  metadata_for = lambda s, e: metadata.seasons[s].episodes[e] if s in media.seasons and e in media.seasons[s].episodes else None
+
   # (1) from detail page
   try:
     html = HTML.ElementFromURL(DAUM_TV_DETAIL % ('tv', urllib.quote(media.title.encode('utf8')), metadata.id))
@@ -421,7 +429,9 @@ def updateDaumTV(metadata, media):
     # poster_url = urllib.unquote(Regex('fname=(.*)').search(html.xpath('//div[@class="info_cont"]/div[@class="wrap_thumb"]/a/img/@src')[0]).group(1))
     poster_url = originalImageUrlFromCdnUrl(html.xpath('//div[@class="info_cont"]/div[@class="wrap_thumb"]/a/img/@src')[0])
     if poster_url not in metadata.posters:
-      metadata.posters[poster_url] = Proxy.Preview(HTTP.Request(poster_url, cacheTime=0), sort_order = len(metadata.posters) + 1)
+      try:
+        metadata.posters[poster_url] = Proxy.Preview(HTTP.Request(poster_url, cacheTime=0), sort_order=len(metadata.posters) + 1)
+      except: pass
   except Exception as e:
     Log.Debug(repr(e))
     pass
@@ -474,20 +484,445 @@ def updateDaumTV(metadata, media):
       if 'photo' in role:
         meta_role.photo = role['photo']
 
+  # TV검색 > TV정보 > 공식홈
+  home = html.xpath(u'//a[span[contains(.,"공식홈")]]/@href')
+  if home:
+    if 'www.imbc.com' in home[0]:
+      page = HTML.ElementFromURL(home[0])
+      for prv in page.xpath('//div[@class="roll-ban-event"]/ul/li/img/@src'):
+        if prv not in metadata.art:
+          try:
+            metadata.art[prv] = Proxy.Preview(HTTP.Request(prv, cacheTime=0), sort_order=len(metadata.art) + 1)
+          except: pass
+
+  # for s in media.seasons:
+  #   Log('media    S%s: %s' % ( s, ' '.join('E' + e for e in media.seasons[s].episodes )))
+  # for s in metadata.seasons:
+  #   Log('metadata S%s: %s' % ( s, ' '.join('E' + e for e in metadata.seasons[s].episodes )))
+
+  # TV검색 > TV정보 > 다시보기
+  vod = html.xpath(u'//div[@class="wrap_btn"]/a[span[contains(.,"다시보기") or contains(.,"무료보기")]]/@href')
+  if vod:
+    replay_url = vod[0]
+  else:
+    if home and 'program.kbs.co.kr' in home[0]:
+      # 카카오VOD > http://program.kbs.co.kr/2tv/drama/dramaspecial2018/pc/list.html?smenu=c2cc5a
+      replay_url = home[0] + 'list.html?smenu=c2cc5a'
+    else:
+      replay_url = None
+      if metadata.studio and Regex('MBC|SBS|KBS|EBS').match(metadata.studio):
+        Log.Debug('No replay URL for [%s] %s' % (metadata.studio, metadata.title))
+
+  if replay_url:
+    # Log('%s: %s %s' % (metadata.studio, media.title, replay_url))
+    if 'imbc.com' in replay_url:
+      try:
+        # http://www.imbc.com/broad/tv/drama/forensic/vod/
+        if 'www.imbc.com' in replay_url:
+          page = HTML.ElementFromURL(replay_url)
+          bid = Regex('var progCode = "(\d+)";').search(page.xpath('//script[contains(.,"var progCode = ")]/text()')[0]).group(1)
+        elif 'playvod.imbc.com/Vod/' in replay_url:
+          # http://playvod.imbc.com/Vod/VodPlay?broadcastId=1005032100002100000 (ContentId)
+          page = HTML.ElementFromURL(replay_url)
+          bid = Regex('var programId = "(\d+)";').search(page.xpath('//script[contains(.,"var programId = ")]/text()')[0]).group(1)
+        elif 'playvod.imbc.com/templete/' in replay_url:
+          # https://playvod.imbc.com/templete/VodList?bid=1006311100000100000   (ProgramId)
+          bid = Regex('bid=(\d+)').search(replay_url).group(1)
+        else:
+          raise Exception('no BID')
+
+        for page in range(1, 11):
+          # https://playvod.imbc.com/api/ContentList_Templete?programId=1006311100000100000&orderBy=d&selectYear=0&curPage=1&pageSize=8&_=1707915741915
+          res = JSON.ObjectFromURL('https://playvod.imbc.com/api/ContentList_Templete?programId=%s&orderBy=d&selectYear=0&curPage=%d&pageSize=%d&_=%d'
+            % ( bid, page, 100, time.time() ), sleep=0.5)
+          # if len(res['ContList']) == 0:
+          #   Log.Debug('*** no ContList')
+          for cont in res['ContList']:
+            # Log('E%s %s %s %s' % (cont['ContentNumber'], cont['BroadDate'], cont['ContentTitle'], cont['Preview']))
+            episode_date = Datetime.ParseDate(cont['BroadDate']).date() # 2018-07-17
+            episode_num = cont['ContentNumber']
+            date_based_season_num = episode_date.year
+            date_based_episode_num = episode_date.strftime('%Y-%m-%d')
+
+            match = Regex(u'^(\d+(-\d+)?)$').search(episode_num)  # 1, 7-8, 특집
+            if match:
+              # if '-' in match.group(1):
+              #   Log.Debug('*** %s' % episode_num)
+              for episode_num in match.group(1).split('-'):
+                episode = (metadata_for('1', episode_num)
+                        or metadata_for(date_based_season_num, date_based_episode_num))
+                if episode:
+                  episode.summary = cont['Preview']
+                  episode.originally_available_at = episode_date
+                  episode.title = cont['ContentTitle']
+                  episode.rating = None
+                  try:
+                    if Prefs['use_episode_thumbnail'] and cont['ContentImg'] not in episode.thumbs:
+                      episode.thumbs[cont['ContentImg']] = Proxy.Preview(HTTP.Request(cont['ContentImg'], cacheTime=0, sleep=0.5))
+                  except: pass
+            else:
+              # Log.Debug('*** %s' % episode_num)
+              episode = metadata_for(date_based_season_num, date_based_episode_num)
+              if episode:
+                episode.summary = cont['Preview']
+                episode.originally_available_at = episode_date
+                episode.title = cont['ContentTitle']
+                episode.rating = None
+                try:
+                  if Prefs['use_episode_thumbnail'] and cont['ContentImg'] not in episode.thumbs:
+                    episode.thumbs[cont['ContentImg']] = Proxy.Preview(HTTP.Request(cont['ContentImg'], cacheTime=0, sleep=0.5))
+                except: pass
+
+          if len(res['ContList']) < 100: break
+
+      except Exception as e:
+        Log.Debug(repr(e))
+        pass
+
+    elif 'sbs.co.kr' in replay_url:
+      try:
+        if 'allvod.sbs.co.kr/search' in replay_url:
+          # (3) https://allvod.sbs.co.kr/search/22000010906/22000291095?type=program&time=30 (무료보기)
+          media_id = Regex('search/(\d+)/(\d+)').search(replay_url).group(2)
+          res = JSON.ObjectFromURL('https://static.apis.sbs.co.kr/allvod-api/media_sub/header/%s?type=program&jwt-token=' % media_id)
+          replay_url = res['content']['hom_url'] # http://programs.sbs.co.kr/drama/30but17
+
+        elif 'allvod.sbs.co.kr/allvod' in replay_url:
+          # (2) http://allvod.sbs.co.kr/allvod/vodFreeProgramDetail.do?type=legend&pgmId=00000263249  # 발리에서 생긴일
+          program_id = Regex('pgmId=(\d+)').search(replay_url).group(1)
+          # https://static.apis.sbs.co.kr/allvod-api/media_sub/vod/00000263249?jwt-token=&page=1&sort=&free_yn=N&srs_id=&srs_year=
+          res = JSON.ObjectFromURL('https://static.apis.sbs.co.kr/allvod-api/media_sub/vod/%s?jwt-token=&page=1&sort=&free_yn=N&srs_id=&srs_year=' % program_id)
+          media_id = res['media']['items'][0]['mda_id']['items'][0]['id']
+          res = JSON.ObjectFromURL('https://static.apis.sbs.co.kr/allvod-api/media_sub/header/%s?type=program&jwt-token=' % media_id)
+          replay_url = res['content']['hom_url'] # http://programs.sbs.co.kr/drama/bali
+
+        if 'programs.sbs.co.kr' not in replay_url:
+          raise Exception('invalid replay_url')
+
+        # (1) http://programs.sbs.co.kr/enter/jungle/vods/50479
+        program_cd = Regex('programs\.sbs\.co\.kr/(.+?)/([^/]+)').search(replay_url).group(2)
+
+        # http://static.apis.sbs.co.kr/program-api/1.0/menu/jungle
+        menu = JSON.ObjectFromURL('http://static.apis.sbs.co.kr/program-api/1.0/menu/%s' % program_cd)
+
+        shareimg = menu['program']['shareimg'].replace('_w640_h360', '_ori')
+        if shareimg.startswith('//'):
+          shareimg = 'http:' + shareimg
+        if shareimg not in metadata.art:
+          try:
+            metadata.art[shareimg] = Proxy.Preview(HTTP.Request(shareimg, cacheTime=0), sort_order=len(metadata.art) + 1)
+          except: pass
+
+        # http://static.apis.sbs.co.kr/play-api/1.0/sbs_vodalls?...
+        vods = JSON.ObjectFromURL('http://static.apis.sbs.co.kr/play-api/1.0/sbs_vodalls?offset=%d&limit=%d&sort=new&search=&cliptype=&subcategory=&programid=%s&absolute_show=Y&mdadiv=01&viewcount=Y' %
+            ( 0, 2000, menu['program']['fullprogramid'] ), max_size=JSON_MAX_SIZE)
+        # if len(vods['list']) == 0:
+        #   Log.Debug('*** no vods')  # 더솔져스
+        for v in vods['list']:
+          # Log('%s %s-%s %s, %s...' % (v['broaddate'], v['content']['contentnumber'], v['content']['cornerid'], v['content']['contenttitle'], v['synopsis'][:20] ))
+
+          # 2018-01-25T23:10:00.000Z 2-0 김어준의 블랙하우스 2회, 프롤로그<br>
+          # 2018-01-18T23:10:00.000Z 1-3 김어준의 블랙하우스 정규 1회, 독한 대담ㅣ양정철 납치작전<br>
+          # 2017-11-05T23:05:00.000Z 1-2 김어준의 블랙하우스 파일럿 2회,  김어준의 블랙하우스 파일럿 2회...
+          # 2017-11-04T23:15:00.000Z 1-1 김어준의 블랙하우스 파일럿 1회,  김어준의 블랙하우스 파일럿 1회...
+
+          # 2019-05-09T22:00:00.000Z 4-2 녹두꽃 1-8회 감독판-사람,하늘이 되다, [3&4회차 통합본] ※ 본 회차는 ...
+          # 2019-05-08T22:00:00.000Z 4-1 녹두꽃 1-8회 감독판-사람,하늘이 되다, [1&2회차 통합본] ※ 본 회차는 ...
+          # 2019-05-04T22:00:00.000Z 4-0 “문명이 사람 교화시킬 것”, [7&8회차 통합본] 이방을 하지 않...
+          # 2019-05-03T22:00:00.000Z 3-0 “안허겄다구요 이방”, [5&6회차 통합본] 횃불이 휩쓸고 ...
+          # 2019-04-27T22:00:00.000Z 2-0 “수금이나 하러 갈까나”, [3&4회차 통합본] 마침내 고부를 ...
+          # 2019-04-26T22:00:00.000Z 1-0 “백성에겐 쌀을 탐관오리에겐 죽음을”, [1&2회차 통합본] 절망의 땅 18...
+
+          # 2016-12-05T22:00:00.000Z 9-0 선(善)의 경계, 도원장은 서정이 PTSD 임을 알고도...
+          # 2016-11-29T22:00:00.000Z 8-2 휴머니즘의 발로(發路), 서정의 목에 낫을 갖다대며 수술을 중...
+          # 2016-11-29T20:55:00.000Z 8-1 낭만닥터 김사부 스페셜, 스페셜 | 낭만닥터 김사부 모아보기<...
+          # 2016-11-28T22:00:00.000Z 7-0 불안 요소, 현철은 기태에게 ‘행정 실장’ 발령장...
+
+          # 2017-11-28T22:00:00.000Z 3-0 “이거 안 놔?”, 종삼(윤균상)은 교도소를 눈 앞에 두...
+          # 2017-11-27T22:35:00.000Z 2-0 “나갈 거야. 탈옥한다고”, 형수 김종삼(윤균상), 오일승 순경 ...
+          # 2017-11-27T22:00:00.000Z 1-2 “착하게 살려고 했는데...”, 사형수 김종삼(윤균상), 오일승 순경...
+          # 2017-11-25T16:25:00.000Z 1-1 의문의 일승 미리보기, <b><font color="red"...
+
+          episode_date = Datetime.ParseDate(v['broaddate']).date()   # 2021-05-29T20:55:00.000Z # Fix TZ
+          date_based_season_num = episode_date.year
+          date_based_episode_num = episode_date.strftime('%Y-%m-%d')
+
+          if Regex('(특집|스페셜|감독판|미리보기|파일럿|숨겨진 이야기|끝나지 않은 이야기|은밀한 이야기)').match(v['content']['contenttitle']):
+            episode = metadata_for(date_based_season_num, date_based_episode_num)
+            if episode:
+              episode.summary = String.DecodeHTMLEntities(v['synopsis']).strip()
+              episode.originally_available_at = episode_date
+              episode.title = String.DecodeHTMLEntities(v['content']['contenttitle']).strip()  # '&lt;무영검&gt; 이서진씨와 함께...'
+              episode.rating = None
+              try:
+                if Prefs['use_episode_thumbnail'] and v['thumb']['medium'] not in episode.thumbs:
+                  episode.thumbs[v['thumb']['medium']] = Proxy.Preview(HTTP.Request(v['thumb']['medium'], cacheTime=0, sleep=0.5))
+              except: pass
+          else:
+            episode_nums = []
+            match = Regex(u'^\[(\d+)&(\d+)회차 통합본\]').search(v['synopsis'])
+            if match:
+              episode_nums.append(match.group(1))
+              episode_nums.append(match.group(2))
+            else:
+              episode_nums.append(str(v['content']['contentnumber']))
+            for episode_num in episode_nums:
+              episode = (metadata_for('1', episode_num)
+                      or metadata_for(date_based_season_num, date_based_episode_num))
+              if episode:
+                episode.summary = String.DecodeHTMLEntities(v['synopsis']).strip()
+                episode.originally_available_at = episode_date
+                episode.title = String.DecodeHTMLEntities(v['content']['contenttitle']).strip()  # '&lt;무영검&gt; 이서진씨와 함께...'
+                episode.rating = None
+                try:
+                  if Prefs['use_episode_thumbnail'] and v['thumb']['medium'] not in episode.thumbs:
+                    episode.thumbs[v['thumb']['medium']] = Proxy.Preview(HTTP.Request(v['thumb']['medium'], cacheTime=0, sleep=0.5))
+                except: pass
+
+      except Exception as e:
+        Log.Debug(repr(e))
+        pass
+
+    elif 'program.kbs.co.kr' in replay_url:
+      try:
+        # http://program.kbs.co.kr/2tv/enter/gagcon/pc/list.html?smenu=c2cc5a
+        source, sname, stype, smenu = Regex('program.kbs.co.kr/(.+?)/(.+?)/(.+?)/pc/list.html\?smenu=(.+)$').search(replay_url).group(1, 2, 3, 4)
+
+        # http://pprogramapi.kbs.co.kr/api/v1/page?platform=P&smenu=c2cc5a&source=2tv&sname=enter&stype=gagcon&page_type=list
+        menu = JSON.ObjectFromURL('http://pprogramapi.kbs.co.kr/api/v1/page?platform=P&smenu=%s&source=%s&sname=%s&stype=%s&page_type=list' %
+            ( smenu, source, sname, stype ))
+
+        image_h = menu['data']['site']['meta']['image_h']
+        if image_h and image_h not in metadata.posters:
+          try:
+            metadata.posters[image_h] = Proxy.Preview(HTTP.Request(image_h, cacheTime=0), sort_order=len(metadata.posters) + 1)
+          except: pass
+
+        image_w = menu['data']['site']['meta']['image_w']
+        if image_w and image_w not in metadata.art:
+          try:
+            metadata.art[image_w] = Proxy.Preview(HTTP.Request(image_w, cacheTime=0), sort_order=len(metadata.art) + 1)
+          except: pass
+
+        page = 1
+        while True:
+          # https://static.api.kbs.co.kr/mediafactory/v1/contents?rtype=jsonp&sort_option=program_planned_date%7Cdesc&program_code=T2017-0270&descriptive_video_service_yn=N&page=1&page_size=9&&callback=angular.callbacks._0
+          res = JSON.ObjectFromURL('https://static.api.kbs.co.kr/mediafactory/v1/contents?rtype=json&sort_option=%s&program_code=%s&descriptive_video_service_yn=N&page=%d&page_size=%d'
+            % ( 'program_planned_date%7Cdesc', menu['data']['site']['meta']['program_code'], page, 18 ), sleep=0.5)
+
+          if 'error_msg' in res:
+            Log.Debug(res['error_msg'])
+            break
+
+          for v in res['data']:
+            # Log('%s %s %s' % (v['program_planned_date'], v['program_sequence_number'], v['program_subtitle']))
+            episode_date = Datetime.ParseDate(v['program_planned_date']).date() # 20130825
+            date_based_season_num = episode_date.year
+            date_based_episode_num = episode_date.strftime('%Y-%m-%d')
+            if v['program_sequence_number']:
+              episode_num = str(v['program_sequence_number'])
+              episode = (metadata_for('1', episode_num)
+                      or metadata_for(date_based_season_num, date_based_episode_num))
+            else:
+              # Log.Debug('*** no sequence number')
+              episode = metadata_for(date_based_season_num, date_based_episode_num)
+            if episode:
+              episode.summary = v['main_story']
+              episode.originally_available_at = episode_date
+              episode.title = v['program_subtitle'] or date_based_episode_num
+              episode.rating = None     # float(v['avg_rating'])
+              try:
+                if Prefs['use_episode_thumbnail'] and v['image_w'] not in episode.thumbs:
+                  episode.thumbs[v['image_w']] = Proxy.Preview(HTTP.Request(v['image_w'], cacheTime=0, sleep=0.5))
+              except: pass
+
+          page += 1
+          if page > res['page_count']:
+            break
+
+      except Exception as e:
+        Log.Debug(repr(e))
+        pass
+
+    elif 'home.ebs.co.kr' in replay_url:
+      try:
+        if '/replay/' not in replay_url:
+          try:
+            # http://home.ebs.co.kr/bestdoctors/review (명의 헬스케어)
+            res = HTTP.Request(replay_url.replace('http:', 'https:'), follow_redirects=False).content
+          except RedirectError as e:
+            # => https://home.ebs.co.kr/bestdoctors/replay/1/list?courseId=BP0PAPG0000000014&stepId=01BP0PAPG0000000014
+            replay_url = e.headers['location']
+
+        courseId, stepId = Regex('courseId=(.+)&stepId=(.+)').search(replay_url).group(1, 2)
+        for page in range(1, 41):
+          # https://www.ebs.co.kr/tv/show?courseId=BP0PAPG0000000014&stepId=01BP0PAPG0000000014 # 명의 헬스케어
+          # https://www.ebs.co.kr/tv/show?courseId=10016245&stepId=10035139&lectId=60444302 # 세상에 나쁜 개는 없다 시즌3
+          res = HTML.ElementFromURL('https://www.ebs.co.kr/tv/show/vodListNew', values={
+              'courseId': courseId,
+              'stepId': stepId,
+              'lectId': '666',    # '10962899',
+              'vodStepNm': '',    # '세상에 나쁜 개는 없다 시즌3',
+              # 'srchType': '',
+              # 'srchText': '',
+              # 'srchYear': '',
+              # 'srchMonth': '',
+              'pageNum': page,
+              # 'vodProdId': ''
+          }, sleep=0.5)
+          for a in res.xpath('//ul[@class="_playList"]/li//a'):
+            episode_date = Datetime.ParseDate(a.xpath('./span[@class="date"]')[0].text).date()  # 2024.02.17
+            date_based_season_num = episode_date.year
+            date_based_episode_num = episode_date.strftime('%Y-%m-%d')
+            match = Regex(u'^(\d+)회').search(a.text.strip())
+            if match:
+              episode_num = match.group(1)
+              episode = (metadata_for('1', episode_num)
+                      or metadata_for(date_based_season_num, date_based_episode_num))
+            else:
+              episode = metadata_for(date_based_season_num, date_based_episode_num)
+            if episode:
+              # if episode.summary and u'회차정보가 없습니다' not in episode.summary:
+              #   continue
+              # Log('E: S%s E%s %s %s' % (season_num, episode_num, episode_date, a.text.strip()))
+              show = HTML.ElementFromURL('https://www.ebs.co.kr/tv/show?prodId=&lectId=%s' % Regex('selVodList\(\'(\d+?)\'').search(a.get('href')).group(1), sleep=0.5)
+              episode.summary = (show.xpath('//p[@class="detail_story"]') or      # https://www.ebs.co.kr/tv/show?... (극한직업)
+                                 show.xpath('//div[@class="detail-page__text"]')  # https://bestdoctors.ebs.co.kr/bestdoctors/vodReplayView?...
+                                )[0].text.strip()
+              episode.originally_available_at = episode_date
+              episode.title = a.text.strip() or date_based_episode_num
+              episode.rating = None
+
+          if page >= int(''.join(res.xpath('//span[@class="pro_vod_page"]//text()')).strip().split(' / ')[1]):
+            break
+
+        # url = replay_url
+        # for page in range(1, 51):
+        #   # https://home.ebs.co.kr/bestdoctors/replay/1/list?courseId=BP0PAPG0000000014&stepId=01BP0PAPG0000000014 (명의)
+        #   res = HTML.ElementFromURL(url, sleep=0.5)
+        #   for div in res.xpath('//div[@class="half-list__item"]'):
+        #     title = div.xpath('.//div[@class="half-list__title"]/text()')[0]
+        #     episode_date = Datetime.ParseDate(div.xpath('.//div[@class="half-list__date"]/text()')[0]).date() # 2024.02.16
+        #     date_based_season_num = episode_date.year
+        #     date_based_episode_num = episode_date.strftime('%Y-%m-%d')
+        #     match = Regex(u'^(\d+)회').search(title)
+        #     if match:
+        #       episode_num = match.group(1)
+        #       episode = (metadata_for('1', episode_num)
+        #               or metadata_for(date_based_season_num, date_based_episode_num))
+        #     else:
+        #       episode = metadata_for(date_based_season_num, date_based_episode_num)
+        #     if episode:
+        #       # if episode.summary and u'회차정보가 없습니다' not in episode.summary:
+        #       #   continue
+        #       # /bestdoctors/vodReplayView?pageNm=replay&siteCd=ME&courseId=BP0PAPG0000000014&stepId=01BP0PAPG0000000014&lectId=60444293
+        #       show = HTML.ElementFromURL(urlparse.urljoin(url, div.xpath('a/@href')[0]), sleep=0.5)
+        #       episode.summary = show.xpath('//div[@class="detail-page__text"]')[0].text.strip()
+        #       episode.originally_available_at = episode_date
+        #       episode.title = title
+        #       episode.rating = None
+        #       try:
+        #         thumb = div.xpath('a/div/img/@src')[0]
+        #         if Prefs['use_episode_thumbnail'] and thumb not in episode.thumbs:
+        #           episode.thumbs[thumb] = Proxy.Preview(HTTP.Request(thumb, cacheTime=0, sleep=0.5))
+        #       except: pass
+        #   nexta = res.xpath('//div[@class="pagination__number-area"]/strong/following-sibling::a[1]/@href | //button[contains(@class,"pagination__arrow--next")]/@onclick')
+        #   if not nexta:
+        #     break
+        #   url = urlparse.urljoin(url, re.sub('(^location.href=\')?(.*?)(\')?$', '\\2', nexta[0]))
+
+        # url = replay_url
+        # for page in range(1, 51):
+        #   # http://home.ebs.co.kr/limit/replay/2/list?courseId=BP0PHPN0000000006&stepId=01BP0PHPN0000000006 (극한직업)
+        #   res = HTML.ElementFromURL(url, follow_redirects=True, sleep=0.5)
+        #   for li in res.xpath('//ul[@class="lst_pro02"]/li'):
+        #     a = li.xpath('p[@class="thum"]/a')[0]
+        #     title = ''.join(li.xpath('.//span[@class="stit_info"]/text()')).strip()
+        #     episode_date = Datetime.ParseDate(li.xpath('.//span[@class="date_info"]')[0].text).date()  # 2024.02.17
+        #     date_based_season_num = episode_date.year
+        #     date_based_episode_num = episode_date.strftime('%Y-%m-%d')
+        #     match = Regex(u'^(\d+)회').search(title)
+        #     if match:
+        #       episode_num = match.group(1)
+        #       episode = (metadata_for('1', episode_num)
+        #               or metadata_for(date_based_season_num, date_based_episode_num))
+        #     else:
+        #       episode = metadata_for(date_based_season_num, date_based_episode_num)
+        #     if episode:
+        #       # if episode.summary and u'회차정보가 없습니다' not in episode.summary:
+        #       #   continue
+        #       # https://www.ebs.co.kr/tv/show?prodId=567&lectId=60444644
+        #       show = HTML.ElementFromURL('https://www.ebs.co.kr/tv/show?prodId=&lectId=%s' % Regex('fn_view\(\'(\d+)\'').search(a.get('onclick')).group(1), sleep=0.5)
+        #       episode.summary = show.xpath('//p[@class="detail_story"]')[0].text.strip()
+        #       episode.originally_available_at = episode_date
+        #       episode.title = title
+        #       episode.rating = None
+        #       try:
+        #         thumb = a.xpath('img/@src')[0]
+        #         if Prefs['use_episode_thumbnail'] and thumb not in episode.thumbs:
+        #           episode.thumbs[thumb] = Proxy.Preview(HTTP.Request(thumb, cacheTime=0, sleep=0.5))
+        #       except: pass
+        #   nexta = res.xpath('//span[@class="num"]/a[@class="on"]/following-sibling::a[1] | //a[@class="page_next"]')
+        #   if not nexta:
+        #     break
+        #   url = urlparse.urljoin(url, nexta[0].get('href'))
+
+      except:
+        Log.Debug(''.join(traceback.format_exc()))
+        pass
+
+    elif 'www.tving.com' in replay_url:
+      try:
+        # https://www.tving.com/contents/P001751069
+        # https://www.tving.com/vod/player/E003636825
+        program_code = Regex('/([A-Z]\d+)$').search(replay_url).group(1)
+        if program_code.startswith('E'):
+          res = JSON.ObjectFromURL('https://api.tving.com/v2/media/content/info?mediaCode=%s&screenCode=CSSD0100&networkCode=CSND0900&osCode=CSOD0900&teleCode=CSCD0900&apiKey=%s'
+              % ( program_code, '1e7952d0917d6aab1f0293a063697610' ))
+          program_code = res['body']['content']['program_code']
+
+        res = JSON.ObjectFromURL(('https://api.tving.com/v2/media/frequency/program/%s?'
+            'order=new&screenCode=CSSD0100&networkCode=CSND0900&osCode=CSOD0900&teleCode=CSCD0900&apiKey=%s&'
+            'cacheType=main&pageSize=20&&adult=all&free=all&guest=all&scope=all') % ( program_code, '1e7952d0917d6aab1f0293a063697610' ))
+
+        for result in res['body']['result']:
+          episode_date = Datetime.ParseDate(str(result['episode']['broadcast_date'])).date()
+          episode_num = str(result['episode']['frequency'])
+          episode = metadata_for('1', episode_num)
+          if episode:
+            episode.summary = result['episode']['synopsis']['ko']
+            episode.originally_available_at = episode_date
+            episode.title = result['vod_name']['ko']
+            episode.rating = None
+            try:
+              # https://image.tving.com/upload/cms/caie/CAIE0200/E000920697.jpg
+              thumb = 'https://image.tving.com' + result['episode']['image'][0]['url']
+              if Prefs['use_episode_thumbnail'] and thumb not in episode.thumbs:
+                episode.thumbs[thumb] = Proxy.Preview(HTTP.Request(thumb, cacheTime=0, sleep=0.5))
+            except: pass
+      except:
+        Log.Debug(''.join(traceback.format_exc()))
+
+    else:
+      Log.Debug('*** 다시보기 not handled: %s' % replay_url)
+
   # (4) from episode page
   for a in html.xpath('//ul[@id="clipDateList"]/li/a'):
-    season_num = '1'
-    episode_num = a.xpath(u'substring-before(./span[@class="txt_episode"],"회")')
     try:
-      episode_date = Datetime.ParseDate(a.xpath('./parent::li/@data-clip')[0], '%Y%m%d').date()
+      episode_date = Datetime.ParseDate(a.xpath('./parent::li/@data-clip')[0]).date()
     except: continue
-    if not episode_num: continue    # 시청지도서
     date_based_season_num = episode_date.year
     date_based_episode_num = episode_date.strftime('%Y-%m-%d')
-    if ((season_num in media.seasons and episode_num in media.seasons[season_num].episodes) or
-        (date_based_season_num in media.seasons and date_based_episode_num in media.seasons[date_based_season_num].episodes)):
-      page = HTML.ElementFromURL('https://search.daum.net/search' + a.get('href'))
-      episode = metadata.seasons[season_num].episodes[episode_num]
+    episode_num = a.xpath(u'substring-before(./span[@class="txt_episode"],"회")')
+    if episode_num:
+      episode = (metadata_for('1', episode_num)
+              or metadata_for(date_based_season_num, date_based_episode_num))
+    else: # 응답하라 1988: 시청지도서
+      episode = metadata_for(date_based_season_num, date_based_episode_num)
+    if episode:
+      if episode.summary and (u'회차정보가 없습니다' not in episode.summary) and (u'줄거리 정보 준비 중입니다' not in episode.summary):
+        continue
+      page = HTML.ElementFromURL('https://search.daum.net/search' + a.get('href'), sleep=0.5)
       subtitle = page.xpath('//p[@class="episode_desc"]/strong/text()')
       episode.summary = '\n'.join(txt.strip() for txt in page.xpath('//p[@class="episode_desc"]/text()')).strip()
       episode.originally_available_at = episode_date
@@ -510,250 +945,6 @@ def updateDaumTV(metadata, media):
             meta_writer.name = writer['name']
           if 'photo' in writer:
             meta_writer.photo = writer['photo']
-
-  # TV검색 > TV정보 > 공식홈
-  home = html.xpath(u'//a[span[contains(.,"공식홈")]]/@href')
-  if home:
-    if 'www.imbc.com' in home[0]:
-      page = HTML.ElementFromURL(home[0])
-      for prv in page.xpath('//div[@class="roll-ban-event"]/ul/li/img/@src'):
-        if prv not in metadata.art:
-          try: metadata.art[prv] = Proxy.Preview(HTTP.Request(prv, cacheTime=0), sort_order = len(metadata.art) + 1)
-          except Exception as e: Log.Debug(repr(e))
-
-  # TV검색 > TV정보 > 다시보기
-  vod = html.xpath(u'//a[span[contains(.,"다시보기")]]/@href')
-  if vod:
-    replay_url = vod[0]
-  else:
-    if home and 'program.kbs.co.kr' in home[0]:
-      # 카카오VOD > http://program.kbs.co.kr/2tv/drama/dramaspecial2018/pc/list.html?smenu=c2cc5a
-      replay_url = home[0] + 'list.html?smenu=c2cc5a'
-    else:
-      replay_url = None
-      if metadata.studio and Regex('MBC|SBS|KBS|EBS').match(metadata.studio):
-        Log.Debug('No replay URL for [%s] %s' % (metadata.studio, metadata.title))
-
-  if replay_url:
-    if 'www.imbc.com' in replay_url:
-      try:
-        prog_codes = []
-        # http://www.imbc.com/broad/tv/ent/challenge/vod/index.html
-        page = HTML.ElementFromURL(replay_url)
-        prog_codes.append(Regex('var progCode = "(.*?)";').search(page.xpath('//script[contains(.,"var progCode = ")]/text()')[0]).group(1))
-        # for season_vod in page.xpath('//map[@name="vod"]/area/@href'):
-        #   # http://www.imbc.com/broad/tv/ent/challenge/vod1/
-        #   # http://www.imbc.com/broad/tv/ent/challenge/vod2/
-        #   page = HTML.ElementFromURL(season_vod)
-        #   prog_codes.append(Regex('var progCode = "(.*?)";').search(page.xpath('//script[contains(.,"var progCode = ")]/text()')[0]).group(1))
-        for prog_code in prog_codes:
-          page = HTTP.Request('http://vodmall.imbc.com/util/wwwUtil_sbox.aspx?kind=image&progCode=%s' % prog_code).content
-          years = Regex("<option value='(\d+)'>").findall(page)
-          for year in years:
-            page = unicode(HTTP.Request('http://vodmall.imbc.com/util/wwwUtil_sbox_contents.aspx?progCode=%s&yyyy=%s&callback=jQuery1123011760857070017172_1538059867383&_=1538059867389'
-                % (prog_code, year)).content, 'euc-kr')
-            bcasts = JSON.ObjectFromString(Regex('jQuery1123011760857070017172_1538059867383\((.*)\)$').search(page).group(1))
-            for bcast in bcasts:
-              # if u'특집' in bcast['ContentNumber'] or u'스페셜' in bcast['ContentNumber']:   # 특집05회, 특집회, 추석특집회, 스페셜회
-              #   # Log('ignoring %s' % bcast['ContentNumber'])
-              #   continue
-              season_num = '1'
-              episode_date = Datetime.ParseDate(bcast['BroadDate'], '%Y-%m-%d').date()
-              match = Regex(u'^(\d+(-\d+)?)회$').search(bcast['ContentNumber'])  # 7-8회, 1회
-              if match:
-                for episode_num in match.group(1).split('-'):
-                  date_based_season_num = episode_date.year
-                  date_based_episode_num = episode_date.strftime('%Y-%m-%d')
-                  if ((season_num in media.seasons and episode_num in media.seasons[season_num].episodes) or
-                      (date_based_season_num in media.seasons and date_based_episode_num in media.seasons[date_based_season_num].episodes)):
-                    episode = metadata.seasons[season_num].episodes[episode_num]
-                    if episode.summary and u'회차정보가 없습니다' not in episode.summary:
-                      continue
-                    page = unicode(HTTP.Request('http://vodmall.imbc.com/util/wwwUtil_json.aspx?kind=image&progCode=%s&callback=jQuery111104041909438012061_1538031601249&_=1538031601252'
-                        % bcast['BroadCastID']).content, 'euc-kr')
-                    info = JSON.ObjectFromString(Regex('jQuery111104041909438012061_1538031601249\((.*)\)$').search(page).group(1))[0]
-                    episode.summary = info['Content'].replace('\r\n', '\n').replace('<br><br>', '\n').replace('<br>', '').strip()
-                    episode.originally_available_at = episode_date
-                    episode.title = info['Title']
-                    episode.rating = None
-      except Exception as e:
-        Log.Debug(repr(e))
-        pass
-
-    elif 'programs.sbs.co.kr' in replay_url:
-      try:
-        # http://programs.sbs.co.kr/enter/jungle/vods/50479
-        programcd, mnuid = Regex('programs\.sbs\.co\.kr/(.+?)/(.+?)/vods/(.+)$').search(replay_url).group(2, 3)
-
-        # http://static.apis.sbs.co.kr/program-api/1.0/menu/jungle
-        menu = JSON.ObjectFromURL('http://static.apis.sbs.co.kr/program-api/1.0/menu/%s' % programcd)
-
-        shareimg = menu['program']['shareimg'].replace('_w640_h360', '_ori')
-        if shareimg.startswith('//'):
-          shareimg = 'http:' + shareimg
-        if shareimg not in metadata.art:
-          try: metadata.art[shareimg] = Proxy.Preview(HTTP.Request(shareimg, cacheTime=0), sort_order = len(metadata.art) + 1)
-          except Exception as e: Log.Debug(repr(e))
-
-        # http://static.apis.sbs.co.kr/play-api/1.0/sbs_vodalls?...
-        vods = JSON.ObjectFromURL('http://static.apis.sbs.co.kr/play-api/1.0/sbs_vodalls?offset=%d&limit=%d&sort=new&search=&cliptype=&subcategory=&programid=%s&absolute_show=Y&mdadiv=01&viewcount=Y' %
-            ( 0, 2000, menu['program']['channelid'] + '_V' + menu['program']['programid'][-10:] ), max_size = JSON_MAX_SIZE)
-        for v in vods['list']:
-          # Log('%s %s-%s %s' % (v['broaddate'], v['content']['contentnumber'], v['content']['cornerid'], v['content']['contenttitle'] ))
-          if v['content']['cornerid'] != 0: # 스페셜
-            continue
-          season_num = '1'
-          episode_date = Datetime.ParseDate(v['broaddate'], '%Y-%m-%d').date()   # fix TZ
-          episode_nums = []
-          match = Regex(u'^\[(\d+)&(\d+)회차 통합본\]').search(v['synopsis'])
-          if match:
-            episode_nums.append(match.group(1))
-            episode_nums.append(match.group(2))
-          else:
-            episode_nums.append(v['content']['contentnumber'])
-          for episode_num in episode_nums:
-            date_based_season_num = episode_date.year
-            date_based_episode_num = episode_date.strftime('%Y-%m-%d')
-            if ((season_num in media.seasons and episode_num in media.seasons[season_num].episodes) or
-                (date_based_season_num in media.seasons and date_based_episode_num in media.seasons[date_based_season_num].episodes)):
-              episode = metadata.seasons[season_num].episodes[episode_num]
-              if episode.summary and u'회차정보가 없습니다' not in episode.summary:
-                continue
-              episode.summary = String.DecodeHTMLEntities(String.StripTags(v['synopsis'])).strip()
-              episode.originally_available_at = episode_date
-              episode.title = v['content']['contenttitle'].strip()
-              episode.rating = None
-      except Exception as e:
-        Log.Debug(repr(e))
-        pass
-
-    elif 'program.kbs.co.kr' in replay_url:
-      try:
-        # http://program.kbs.co.kr/2tv/enter/gagcon/pc/list.html?smenu=c2cc5a
-        source, sname, stype, smenu = Regex('program.kbs.co.kr/(.+?)/(.+?)/(.+?)/pc/list.html\?smenu=(.+)$').search(replay_url).group(1, 2, 3, 4)
-
-        # http://pprogramapi.kbs.co.kr/api/v1/page?platform=P&smenu=c2cc5a&source=2tv&sname=enter&stype=gagcon&page_type=list
-        menu = JSON.ObjectFromURL('http://pprogramapi.kbs.co.kr/api/v1/page?platform=P&smenu=%s&source=%s&sname=%s&stype=%s&page_type=list' %
-            ( smenu, source, sname, stype ))
-
-        image_h = menu['data']['site']['meta']['image_h']
-        if image_h not in metadata.posters:
-          try: metadata.posters[image_h] = Proxy.Preview(HTTP.Request(image_h, cacheTime=0), sort_order = len(metadata.posters) + 1)
-          except Exception as e: Log.Debug(repr(e))
-
-        image_w = menu['data']['site']['meta']['image_w']
-        if image_w not in metadata.art:
-          try: metadata.art[image_w] = Proxy.Preview(HTTP.Request(image_w, cacheTime=0), sort_order = len(metadata.art) + 1)
-          except Exception as e: Log.Debug(repr(e))
-
-        page = 1
-        while True:
-          # https://ummsapi.kbs.co.kr/landing/contents/episode/list?rtype=jsonp&sort_option=rdatetime%20desc&program_code=T2000-0065&page=1&page_size=9&&callback=angular.callbacks._0
-          res = JSON.ObjectFromURL('https://ummsapi.kbs.co.kr/landing/contents/episode/list?rtype=json&sort_option=rdatetime%%20desc&program_code=%s&page=%d&page_size=%d' %
-              ( menu['data']['site']['meta']['program_code'], page, 500 ))
-          if 'error_msg' in res:
-            Log.Debug(res['error_msg'])
-            break
-
-          for v in res['data']:
-            # Log('%s %s %s' % (v['program_date'], v['program_number'], v['program_subtitle'] or v['description']))
-            if not v['program_number']:
-              continue
-            season_num = '1'
-            episode_num = v['program_number']
-            episode_date = Datetime.ParseDate(v['program_date'], '%Y%m%d').date()
-            date_based_season_num = episode_date.year
-            date_based_episode_num = episode_date.strftime('%Y-%m-%d')
-            if ((season_num in media.seasons and episode_num in media.seasons[season_num].episodes) or
-                (date_based_season_num in media.seasons and date_based_episode_num in media.seasons[date_based_season_num].episodes)):
-              episode = metadata.seasons[season_num].episodes[episode_num]
-              if episode.summary and u'회차정보가 없습니다' not in episode.summary:
-                continue
-              episode.summary = v['program_summary']
-              episode.originally_available_at = episode_date
-              episode.title = v['program_subtitle'] or v['description'] or date_based_episode_num
-              episode.rating = None     # float(v['avg_rating'])
-
-          page += 1
-          if page > res['page_count']:
-            break
-
-      except Exception as e:
-        Log.Debug(repr(e))
-        pass
-
-    elif 'home.ebs.co.kr' in replay_url:
-      try:
-        # http://home.ebs.co.kr/bestdoctors/review
-        #  => http://home.ebs.co.kr/bestdoctors/replay/1/list;jsessionid=...?courseId=BP0PAPG0000000014&stepId=01BP0PAPG0000000014
-        # http://home.ebs.co.kr/baddog/replay/24/list?courseId=10016245&stepId=10035139
-        match = Regex('courseId=(.+)&stepId=(.+)').search(replay_url)
-        if match:
-          courseId, stepId = match.group(1, 2)
-          page = 1
-          while True:
-            html = HTML.ElementFromURL('https://www.ebs.co.kr/tv/show/vodListNew', values={
-                'courseId': courseId,
-                'stepId': stepId,
-                'lectId': '666',    # '10962899',
-                'vodStepNm': '',    # '세상에 나쁜 개는 없다 시즌3',
-                # 'srchType': '',
-                # 'srchText': '',
-                # 'srchYear': '',
-                # 'srchMonth': '',
-                'pageNum': page,
-                # 'vodProdId': ''
-            }, sleep = 0.5)
-            for a in html.xpath('//ul[@class="_playList"]/li//a'):
-              season_num = '1'
-              episode_date = Datetime.ParseDate(a.xpath('./span[@class="date"]')[0].text, '%Y.%m.%d').date()
-              match = Regex(u'^(\d+)회').search(a.text.strip())
-              if match:
-                episode_num = match.group(1)
-              else:
-                episode_num = episode_date.strftime('%y%m%d')
-              date_based_season_num = episode_date.year
-              date_based_episode_num = episode_date.strftime('%Y-%m-%d')
-              if ((season_num in media.seasons and episode_num in media.seasons[season_num].episodes) or
-                  (date_based_season_num in media.seasons and date_based_episode_num in media.seasons[date_based_season_num].episodes)):
-                episode = metadata.seasons[season_num].episodes[episode_num]
-                if episode.summary and u'회차정보가 없습니다' not in episode.summary:
-                  continue
-                # Log('E: S%s E%s %s %s' % (season_num, episode_num, episode_date, a.text.strip()))
-                show = HTML.ElementFromURL('https://www.ebs.co.kr/tv/show?prodId=&lectId=%s' % Regex('selVodList\(\'(\d+?)\'').search(a.get('href')).group(1), sleep = 0.5)
-                episode.summary = show.xpath('//p[@class="detail_story"]')[0].text.strip()
-                episode.originally_available_at = episode_date
-                episode.title = a.text.strip() or date_based_episode_num
-                episode.rating = None
-
-            page += 1
-            if page > min(20, int(''.join(html.xpath('//span[@class="pro_vod_page"]//text()')).strip().split(' / ')[1])):
-              break
-
-      except Exception as e:
-        Log.Debug(repr(e))
-        pass
-
-    elif 'www.tving.com' in replay_url:
-      try:
-        # https://www.tving.com/contents/P001641335
-        programCode = Regex('contents/(.+)$').search(replay_url).group(1)
-        response = JSON.ObjectFromURL(('https://api.tving.com/v2/media/frequency/program/%s?'
-            'order=new&screenCode=CSSD0100&networkCode=CSND0900&osCode=CSOD0900&teleCode=CSCD0900&apiKey=1e7952d0917d6aab1f0293a063697610&'
-            'cacheType=main&pageSize=20&&adult=all&free=all&guest=all&scope=all') % programCode)
-        for result in response['body']['result']:
-          episode = metadata.seasons['1'].episodes[str(result['episode']['frequency'])]
-          episode.summary = result['episode']['synopsis']['ko']
-          episode.originally_available_at = Datetime.ParseDate(str(result['episode']['broadcast_date']), '%Y%m%d').date()
-          episode.title = result['vod_name']['ko']
-          episode.rating = None
-
-      except Exception as e:
-        Log.Debug(repr(e))
-        pass
-
-    else:
-      Log.Debug(replay_url)
 
   #   # (5) fill missing info
   #   # if Prefs['override_tv_id'] != 'None':

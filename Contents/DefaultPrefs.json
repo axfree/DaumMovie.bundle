@@ -46,6 +46,12 @@
     "default": "false"
   },
   {
+    "id": "use_episode_thumbnail",
+    "label": "Use episode thumbnail",
+    "type": "bool",
+    "default": "false"
+  },
+  {
     "id": "http_proxy",
     "label": "Web proxy (http) (PMS restart required)",
     "type": "text",
