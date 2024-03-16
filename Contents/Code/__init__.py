@@ -552,9 +552,9 @@ def updateDaumTV(metadata, media):
                 episode = (metadata_for('1', episode_num)
                         or metadata_for(date_based_season_num, date_based_episode_num))
                 if episode:
-                  episode.summary = cont['Preview']
+                  episode.summary = String.DecodeHTMLEntities(String.StripTags(cont['Preview'])).strip()
                   episode.originally_available_at = episode_date
-                  episode.title = cont['ContentTitle']
+                  episode.title = String.DecodeHTMLEntities(cont['ContentTitle']).strip()
                   episode.rating = None
                   try:
                     if Prefs['use_episode_thumbnail'] and cont['ContentImg'] not in episode.thumbs:
@@ -564,9 +564,9 @@ def updateDaumTV(metadata, media):
               # Log.Debug('*** %s' % episode_num)
               episode = metadata_for(date_based_season_num, date_based_episode_num)
               if episode:
-                episode.summary = cont['Preview']
+                episode.summary = String.DecodeHTMLEntities(String.StripTags(cont['Preview'])).strip()
                 episode.originally_available_at = episode_date
-                episode.title = cont['ContentTitle']
+                episode.title = String.DecodeHTMLEntities(cont['ContentTitle']).strip()
                 episode.rating = None
                 try:
                   if Prefs['use_episode_thumbnail'] and cont['ContentImg'] not in episode.thumbs:
