@@ -427,7 +427,7 @@ def updateDaumTV(metadata, media):
     # //search1.kakaocdn.net/thumb/C232x336.q85/?fname=http%3A%2F%2Ft1.daumcdn.net%2Fcontentshub%2Fsdb%2Ff63c5467710f5669caac131943855dfea31011003e57e674832fe8b16b946aa8
     # poster_url = urlparse.parse_qs(urlparse.urlparse(html.xpath('//div[@class="info_cont"]/div[@class="wrap_thumb"]/a/img/@src')[0]).query)['fname'][0]
     # poster_url = urllib.unquote(Regex('fname=(.*)').search(html.xpath('//div[@class="info_cont"]/div[@class="wrap_thumb"]/a/img/@src')[0]).group(1))
-    poster_url = originalImageUrlFromCdnUrl(html.xpath('//div[@class="info_cont"]/div[@class="wrap_thumb"]/a/img/@src')[0])
+    poster_url = originalImageUrlFromCdnUrl(html.xpath('//div[@class="info_cont"]/div[@class="wrap_thumb"]/a/img/@data-original-src')[0])
     if poster_url not in metadata.posters:
       try:
         metadata.posters[poster_url] = Proxy.Preview(HTTP.Request(poster_url, cacheTime=0), sort_order=len(metadata.posters) + 1)
@@ -447,7 +447,7 @@ def updateDaumTV(metadata, media):
       role = item.xpath('./span[@class="sub_name"]/text()')[0].strip().replace(u'이전 ', '')
       cast = dict()
       cast['name'] = item.xpath('./span[@class="txt_name"]/a/text()')[0]
-      cast['photo'] = item.xpath('./div/a/img/@src')[0]
+      cast['photo'] = item.xpath('./div/a/img/@data-original-src')[0]
       if role in [u'감독', u'연출', u'조감독']:
         directors.append(cast)
       elif role in [u'제작', u'프로듀서', u'책임프로듀서', u'기획']:
@@ -465,11 +465,11 @@ def updateDaumTV(metadata, media):
       if a:
         cast['name'] = a[0].text
         cast['role'] = item.xpath('./span[@class="txt_name"]/a')[0].text
-        cast['photo'] = originalImageUrlFromCdnUrl(item.xpath('./div/a/img/@src')[0])
+        cast['photo'] = originalImageUrlFromCdnUrl(item.xpath('./div/a/img/@data-original-src')[0])
       else:
         cast['name'] = item.xpath('./span[@class="txt_name"]/a')[0].text
         cast['role'] = item.xpath('./span[@class="sub_name"]')[0].text.strip()
-        cast['photo'] = originalImageUrlFromCdnUrl(item.xpath('./div/a/img/@src')[0])
+        cast['photo'] = originalImageUrlFromCdnUrl(item.xpath('./div/a/img/@data-original-src')[0])
       roles.append(cast)
     except: pass
 
