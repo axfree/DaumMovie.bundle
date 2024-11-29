@@ -116,6 +116,10 @@ def searchDaumMovie(results, media, lang):
         except:
           etitle, year = None, None
 
+        if not year:
+          for oaa in em1Coll.xpath(u'.//c-doc-content//dt[.="개봉" or .="재개봉"]/following-sibling::dd[1]/span'):
+            year = Datetime.ParseDate(oaa.text).date().year
+
         items.append({
           'id': Regex('irk=(\d+)').search(ctitle.get('data-href')).group(1),
           'title': ctitle.text.strip(),
@@ -267,7 +271,8 @@ def updateDaumMovie(metadata, media):
         metadata.countries.add(country)
 
     # 줄거리
-    metadata.summary = card.xpath('./c-summary')[0].text.strip()
+    for summary in card.xpath('./c-summary'):
+      metadata.summary = summary.text.strip()
 
     # 포스터
     for poster_url in card.xpath('./c-doc-content/c-thumb/@data-original-src'):
