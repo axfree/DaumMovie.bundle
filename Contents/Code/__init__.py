@@ -9,8 +9,8 @@ DAUM_MOVIE_SRCH   = "https://search.daum.net/search?w=tot&q=%s&rtmaxcoll=EM1"
 
 DAUM_MOVIE_DETAIL = "https://search.daum.net/search?w=cin&q=%s&DA=EM1&rtmaxcoll=EM1&irt=movie-single-tab&irk=%s&refq=&tabInfo=total"
 
-DAUM_TV_SRCH      = "https://search.daum.net/search?w=tot&q=%s&rtmaxcoll=TVP"
-DAUM_TV_DETAIL    = "https://search.daum.net/search?w=%s&q=%s&irk=%s&irt=tv-program&DA=TVP"
+DAUM_TV_SRCH      = "https://search.daum.net/search?w=tv&q=%s"
+DAUM_TV_DETAIL    = "https://search.daum.net/search?w=tv&q=%s&coll=tv-main&spId=%s&spt=tv-info&DA=TVP&rtmaxcoll=TVP"
 
 IMDB_TITLE_SRCH   = "http://www.google.com/search?q=site:imdb.com+%s"
 TVDB_TITLE_SRCH   = "http://thetvdb.com/api/GetSeries.php?seriesname=%s"
@@ -191,44 +191,38 @@ def searchDaumTV(results, media, lang):
     return
 
   items = []
-  title, id = Regex('q=(.*?)&irk=(\d+)').search(tvp.xpath('//a[@class="tit_info"]/@href')[-1]).group(1, 2)
+
+  title, id = Regex('q=(.*?)&coll=(.*?)&spId=(\d+)&spt=(.*?)&').search(tvp.xpath('//div[@class="area_tit"]//a/@href')[0]).group(1, 3)
   title = urllib.unquote(title)
   try:
-    year = Regex('(\d{4})\.\d+\.\d+~').search(tvp.xpath('//div[@class="head_cont"]//span[@class="txt_summary"][last()]')[0].text).group(1)
+    year = Regex('(\d{2})\.\d{2}\.\d{2}\. ~').search(tvp.xpath('//div[@class="area_tit"]//span[@class="txt_info"][3]/span')[0].text).group(1)
+    year = '20' + year if int(year) < 69 else '19' + year
   except: year = None
   items.append({ 'id': id, 'title': title, 'year': year })
 
   # TV검색 > 시리즈
-  more_a = tvp.xpath(u'//a[span[.="시리즈 더보기"]]')
-  if more_a:
-    html = HTML.ElementFromURL('https://search.daum.net/search%s' % more_a[0].get('href'))
-    for li in html.xpath('//div[@id="series"]//li'):
-      a = li.xpath('.//a')[1]
-      id = Regex('irk=(\d+)').search(a.get('href')).group(1)
-      title = a.text
+  # 낭만닥터 김사부 (2016)
+  series_a = tvp.xpath(u'//div[@class="c-section-tab"]//li/a[.="시리즈"]')
+  if series_a:
+    html = HTML.ElementFromURL('https://search.daum.net/search%s' % series_a[0].get('href'))
+    for li in html.xpath('//div[@id="tvpColl"]//div[@class="cont_pannel cont_clip"]//li'):
+      a = li.xpath('.//div[@class="item-title"]//a')[0]
+      id = Regex('spId=(\d+)').search(a.get('href')).group(1)
+      title = a.text.strip()
       try:
-        year = Regex('(\d{4})\.\d+').search(li.xpath('./span')[0].text).group(1)
-        items.append({ 'id': id, 'title': title, 'year': year })
-      except: pass
-  else:
-    lis = tvp.xpath('//div[@id="tv_series"]//li')
-    for li in lis:
-      id = Regex('irk=(\d+)').search(li.xpath('./a/@href')[0]).group(1)
-      title = li.xpath('./a')[0].text
-      try:
-        year = Regex('(\d{4})\.\d+').search(li.xpath('./span')[0].text).group(1)
-        items.append({ 'id': id, 'title': title, 'year': year })
-      except: pass
+        year = Regex('(\d{4})\.\d{2}').search(li.xpath('.//div[@class="item-contents"]//span')[0].text).group(1)
+      except: year = None
+      items.append({ 'id': id, 'title': title, 'year': year })
 
-  # TV검색 > 동명 콘텐츠
-  spans = tvp.xpath(u'//div[contains(@class,"coll_etc")]//span[.="(동명프로그램)"]')
-  for span in spans:
-    try:
-      year = Regex('(\d{4})').search(span.xpath('./preceding-sibling::span[1]')[0].text).group(1)
-    except: year = None
-    a = span.xpath('./preceding-sibling::a[1]')[0]
-    id = Regex('irk=(\d+)').search(a.get('href')).group(1)
+  # TV검색 > 동명프로그램
+  # 연인 (2023), 굿 파트너 (2024)
+  for div in tvp.xpath(u'//div[@class="cont_pannel"]/strong[.="동명프로그램"]/following-sibling::div//div[@class="item-bundle-mid"]'):
+    a = div.xpath('./div[@class="item-title"]//a')[0]
+    id = Regex('spId=(\d+)').search(a.get('href')).group(1)
     title = a.text.strip()
+    try:
+      year = Regex(', (\d{4})\.').search(div.xpath('./div[@class="item-contents"]//dd[@class="program"]/text()[normalize-space()]')[0]).group(1)
+    except: year = None
     items.append({ 'id': id, 'title': title, 'year': year })
 
   for idx, item in enumerate(items):
@@ -409,34 +403,47 @@ def updateDaumTV(metadata, media):
 
   # (1) from detail page
   try:
-    html = HTML.ElementFromURL(DAUM_TV_DETAIL % ('tv', urllib.quote(media.title.encode('utf8')), metadata.id))
+    html = HTML.ElementFromURL(DAUM_TV_DETAIL % (urllib.quote(media.title.encode('utf8')), metadata.id))
     #metadata.title = html.xpath('//div[@class="tit_program"]/strong')[0].text
     metadata.title = media.title
     metadata.title_sort = unicodedata.normalize('NFD' if Prefs['use_title_decomposition'] else 'NFC', metadata.title)
     metadata.original_title = ''
     metadata.rating = None
-    metadata.genres.clear()
-    # 드라마 (24부작)
-    metadata.genres.add(Regex(u'(.*?)(?:\u00A0(\(.*\)))?$').search(html.xpath(u'//dt[.="장르"]/following-sibling::dd/text()')[0]).group(1))
-    spans = html.xpath('//div[@class="txt_summary"]/span')
-    if not spans:
-      tot = HTML.ElementFromURL(DAUM_TV_DETAIL % ('tot', urllib.quote(media.title.encode('utf8')), metadata.id))
-      spans = tot.xpath('//div[@class="summary_info"]/*[@class="txt_summary"]')
-    if spans:
-      metadata.studio = spans[0].text
-      match = Regex('(\d+\.\d+\.\d+)~(\d+\.\d+\.\d+)?').search(spans[-1].text or '')
-      if match:
-        metadata.originally_available_at = Datetime.ParseDate(match.group(1)).date()
-    metadata.summary = String.DecodeHTMLEntities(String.StripTags(html.xpath(u'//dt[.="소개"]/following-sibling::dd')[0].text).strip())
 
-    # //search1.kakaocdn.net/thumb/C232x336.q85/?fname=http%3A%2F%2Ft1.daumcdn.net%2Fcontentshub%2Fsdb%2Ff63c5467710f5669caac131943855dfea31011003e57e674832fe8b16b946aa8
-    # poster_url = urlparse.parse_qs(urlparse.urlparse(html.xpath('//div[@class="info_cont"]/div[@class="wrap_thumb"]/a/img/@src')[0]).query)['fname'][0]
-    # poster_url = urllib.unquote(Regex('fname=(.*)').search(html.xpath('//div[@class="info_cont"]/div[@class="wrap_thumb"]/a/img/@src')[0]).group(1))
-    poster_url = originalImageUrlFromCdnUrl(html.xpath('//div[@class="info_cont"]/div[@class="wrap_thumb"]/a/img/@data-original-src')[0])
-    if poster_url not in metadata.posters:
-      try:
-        metadata.posters[poster_url] = Proxy.Preview(HTTP.Request(poster_url, cacheTime=0), sort_order=len(metadata.posters) + 1)
-      except: pass
+    metadata.genres.clear()
+
+    # 예능 | 14부작 | 24.11.15. ~ 25.01.17. | 완결
+    # 예능 | 22.06.06. ~
+    # 드라마 | 7부작 | 24.12.26. | 완결
+    # 8부작 | 25.01.24. | 완결
+    txt_infos = ' | '.join(html.xpath('//div[@class="area_tit"]/div[@class="sub_header"]//span[@class="txt_info"]//text()'))
+    genre, eps, oaa = Regex(u'^(?:(예능|드라마) \| )?(?:(\d+)부작 \| )?(\d{2}\.\d{2}\.\d{2}\.)[ ~\d.]*(?: \| (완결))?$').search(txt_infos).group(1, 2, 3)
+    if genre:
+      metadata.genres.add(genre)
+    metadata.originally_available_at = Datetime.ParseDate(oaa, '%y.%m.%d.').date()
+
+    # txt_infos = html.xpath('//div[@class="area_tit"]/div[@class="sub_header"]//span[@class="txt_info"]')
+    # for idx, txt_info in enumerate(txt_infos):
+    #   a = txt_info.xpath('./a')
+    #   if a:
+    #     metadata.genres.add(a[0].text)   # 드라마 or 예능
+    #   else:
+    #     match = Regex('^(\d{2}\.\d{2}\.\d{2}\.)').search(txt_info.xpath('./span')[0].text)
+    #     if match:
+    #       metadata.originally_available_at = Datetime.ParseDate(match.group(1), '%y.%m.%d.').date()
+
+    metadata.studio = html.xpath(u'//dt[.="편성"]/following-sibling::dd//a')[0].text
+    metadata.summary = html.xpath(u'//dt[.="소개"]/following-sibling::dd//p[contains(@class,"desc_story")]')[0].text.strip()
+
+    # https://search1.kakaocdn.net/thumb/C208x290.q85/?fname=http%3A%2F%2Ft1.daumcdn.net%2Fcontentshub%2Fsdb%2Fe1369dc1d18bb3ec780a942ef9b3c81eda47065fd64c8f7162ce302420366d30
+    #   http://t1.daumcdn.net/contentshub/sdb/e1369dc1d18bb3ec780a942ef9b3c81eda47065fd64c8f7162ce302420366d30
+    poster_url = html.xpath('//div[contains(@class,"cont_pannel")]//div[@class="item-thumb"]//img/@data-original-src')
+    if poster_url:
+      poster_url = originalImageUrlFromCdnUrl(poster_url[0])
+      if poster_url not in metadata.posters:
+        try:
+          metadata.posters[poster_url] = Proxy.Preview(HTTP.Request(poster_url, cacheTime=0), sort_order=len(metadata.posters) + 1)
+        except: pass
   except Exception as e:
     Log.Debug(repr(e))
     pass
@@ -447,66 +454,101 @@ def updateDaumTV(metadata, media):
   writers = list()
   roles = list()
 
-  for item in html.xpath('//div[@class="wrap_col lst"]/ul/li'):
-    try:
-      role = item.xpath('./span[@class="sub_name"]/text()')[0].strip().replace(u'이전 ', '')
-      cast = dict()
-      cast['name'] = item.xpath('./span[@class="txt_name"]/a/text()')[0]
-      cast['photo'] = item.xpath('./div/a/img/@data-original-src')[0]
-      if role in [u'감독', u'연출', u'조감독']:
-        directors.append(cast)
-      elif role in [u'제작', u'프로듀서', u'책임프로듀서', u'기획']:
-        producers.append(cast)
-      elif role in [u'극본', u'각본', u'원작']:
-        writers.append(cast)
-      else:
-        Log.Debug('Unknown role %s' % role)
-    except: pass
+  # TV검색 > 출연
+  cast_a = html.xpath(u'//div[@class="c-section-tab"]//li/a[.="출연"]')
+  if cast_a:
+    page = HTML.ElementFromURL('https://search.daum.net/search%s' % cast_a[0].get('href'))
+    for li in page.xpath(u'//div[@id="tvpColl"]//div[@class="cont_pannel cont_cast"]//div[@data-tab="제작"]//li'):
+      try:
+        role = li.xpath('.//div[@class="item-contents"]/span')[0].text.strip()
+        photo = li.xpath('.//div[@class="item-thumb"]//img/@data-original-src')[0]
+        cast = dict()
+        cast['name'] = li.xpath('.//div[@class="item-title"]/span')[0].text.strip()
+        cast['photo'] = originalImageUrlFromCdnUrl(photo) if photo != 'thumb_noimg' else None
 
-  for item in html.xpath('//div[@class="wrap_col castingList"]/ul/li'):
-    try:
-      cast = dict()
-      a = item.xpath('./span[@class="sub_name"]/a')
-      if a:
-        cast['name'] = a[0].text
-        cast['role'] = item.xpath('./span[@class="txt_name"]/a')[0].text
-        cast['photo'] = originalImageUrlFromCdnUrl(item.xpath('./div/a/img/@data-original-src')[0])
-      else:
-        cast['name'] = item.xpath('./span[@class="txt_name"]/a')[0].text
-        cast['role'] = item.xpath('./span[@class="sub_name"]')[0].text.strip()
-        cast['photo'] = originalImageUrlFromCdnUrl(item.xpath('./div/a/img/@data-original-src')[0])
-      roles.append(cast)
-    except: pass
+        if role in [u'감독', u'연출', u'조감독']:
+          directors.append(cast)
+        elif role in [u'제작', u'프로듀서', u'책임프로듀서', u'기획']:
+          producers.append(cast)
+        elif role in [u'극본', u'각본', u'원작', u'작가']:
+          writers.append(cast)
+        else:
+          Log.Debug('Unknown role %s' % role)
+      except: pass
 
-  if roles:
-    metadata.roles.clear()
-    for role in roles:
-      meta_role = metadata.roles.new()
-      if 'role' in role:
-        meta_role.role = role['role']
-      if 'name' in role:
-        meta_role.name = role['name']
-      if 'photo' in role:
-        meta_role.photo = role['photo']
+    for li in page.xpath(u'//div[@id="tvpColl"]//div[@class="cont_pannel cont_cast"]//div[@data-tab="출연"]//li'):
+      try:
+        # title_a = li.xpath('.//div[@class="item-title"]//a')[0]
+        title_a = li.xpath('.//div[@class="item-title"]/strong/*')[0] # a or span
+        if title_a.xpath(u'./span[@class="txt_role" and normalize-space(text())="역"]'):
+          # 기훈 역 / 이정재
+          role = title_a.xpath('./span[1]')[0].text.strip()
+          name = li.xpath('.//div[@class="item-contents"]/p/a | .//div[@class="item-contents"]/p/span')[0].text
+        else:
+          # 장동민 / 출연
+          name = title_a.text.strip()
+          if name == '인물관계도':
+            continue
+          role = li.xpath('.//div[@class="item-contents"]/span')[0].text
+        photo = li.xpath('.//div[@class="item-thumb"]//img/@data-original-src')[0]
+        cast = dict()
+        cast['name'] = name
+        cast['role'] = role
+        if photo != 'thumb_noimg':
+          cast['photo'] = originalImageUrlFromCdnUrl(photo)
+        roles.append(cast)
+      except: Log.Debug(''.join(traceback.format_exc()))
 
-  # TV검색 > TV정보 > 공식홈
-  home = html.xpath(u'//a[span[contains(.,"공식홈")]]/@href')
+    if roles:
+      metadata.roles.clear()
+      for role in roles:
+        meta_role = metadata.roles.new()
+        if 'role' in role:
+          meta_role.role = role['role']
+        if 'name' in role:
+          meta_role.name = role['name']
+        if 'photo' in role:
+          meta_role.photo = role['photo']
+
+  return
+  # TV검색 > 정보 > 사이트 > 공식홈
+  home = html.xpath(u'//dt[.="사이트"]/following-sibling::dd//a[.="공식홈"]/@href')
   if home:
-    if 'www.imbc.com' in home[0]:
-      page = HTML.ElementFromURL(home[0])
-      for prv in page.xpath('//div[@class="roll-ban-event"]/ul/li/img/@src'):
-        if prv not in metadata.art:
-          try:
-            metadata.art[prv] = Proxy.Preview(HTTP.Request(prv, cacheTime=0), sort_order=len(metadata.art) + 1)
-          except: pass
+    if 'imbc.com' in home[0]:
+      # 프로그램 홈
+      # https://program.imbc.com/mydearest
+      # https://program.imbc.com/MotelCalifornia
+      page = HTTP.Request(home[0]).content
+      bid = Regex(r'var bid = (\d+)').search(page).group(1)
+
+      # https://control.imbc.com/Progarm/Menu?callback=ProgramSetMenu_1006641100000100000_P&bid=1006641100000100000&device=P
+      # https://control.imbc.com/Progarm/Menu?bid=1006641100000100000&device=P
+      res = JSON.ObjectFromURL('https://control.imbc.com/Progarm/Menu?bid=%s&device=P' % bid)
+      try:
+        poster_menu = (m for m in res['List'] if m['Menuname1'] == '포스터').next()
+        # Log(poster_menu['Keyword'])
+        for pg in range(10):
+          page = HTML.ElementFromURL('https://imbbs.imbc.com/v2/list.aspx?bid=%s&page=%s&list_use=1&sk=&sv=' % (poster_menu['Keyword'], pg + 1))
+          # Paging(15, 2, 12, 10, 1, "")
+          # Paging(15, 2, 12, 10, 2, "")
+          imgs = page.xpath('//table[@class="board_table type_photo"]//img/@src')
+          if not imgs:
+            break
+          for img in [ 'https:' + img if img.startswith('//') else img for img in imgs ]:
+            if img not in metadata.posters:
+              try:
+                metadata.posters[img] = Proxy.Preview(HTTP.Request(img, headers={ 'Accept': 'image/jpeg' }, cacheTime=0), sort_order=len(metadata.posters) + 1)
+              except: pass
+      except StopIteration:
+        Log.Debug('No poster menu')
 
   # for s in media.seasons:
   #   Log('media    S%s: %s' % ( s, ' '.join('E' + e for e in media.seasons[s].episodes )))
   # for s in metadata.seasons:
   #   Log('metadata S%s: %s' % ( s, ' '.join('E' + e for e in metadata.seasons[s].episodes )))
 
-  # TV검색 > TV정보 > 다시보기
-  vod = html.xpath(u'//div[@class="wrap_btn"]/a[span[contains(.,"다시보기") or contains(.,"무료보기")]]/@href')
+  # TV검색 > 정보 > 사이트 > 다시보기
+  vod = html.xpath(u'//dt[.="사이트"]/following-sibling::dd//a[.="다시보기"]/@href')
   if vod:
     replay_url = vod[0]
   else:
@@ -911,45 +953,88 @@ def updateDaumTV(metadata, media):
     else:
       Log.Debug('*** 다시보기 not handled: %s' % replay_url)
 
-  # (4) from episode page
-  for a in html.xpath('//ul[@id="clipDateList"]/li/a'):
+#   # (4) from episode page
+#   for a in html.xpath('//ul[@id="clipDateList"]/li/a'):
+#     try:
+#       episode_date = Datetime.ParseDate(a.xpath('./parent::li/@data-clip')[0]).date()
+#     except: continue
+#     date_based_season_num = episode_date.year
+#     date_based_episode_num = episode_date.strftime('%Y-%m-%d')
+#     episode_num = a.xpath(u'substring-before(./span[@class="txt_episode"],"회")')
+#     if episode_num:
+#       episode = (metadata_for('1', episode_num)
+#               or metadata_for(date_based_season_num, date_based_episode_num))
+#     else: # 응답하라 1988: 시청지도서
+#       episode = metadata_for(date_based_season_num, date_based_episode_num)
+#     if episode:
+#       if episode.summary and (u'회차정보가 없습니다' not in episode.summary) and (u'줄거리 정보 준비 중입니다' not in episode.summary):
+#         continue
+#       page = HTML.ElementFromURL('https://search.daum.net/search' + a.get('href'), sleep=0.5)
+#       subtitle = page.xpath('//p[@class="episode_desc"]/strong/text()')
+#       episode.summary = '\n'.join(txt.strip() for txt in page.xpath('//p[@class="episode_desc"]/text()')).strip()
+#       episode.originally_available_at = episode_date
+#       episode.title = subtitle[0] if subtitle else date_based_episode_num
+#       episode.rating = None
+#
+#       if directors:
+#         episode.directors.clear()
+#         for director in directors:
+#           meta_director = episode.directors.new()
+#           if 'name' in director:
+#             meta_director.name = director['name']
+#           if 'photo' in director:
+#             meta_director.photo = director['photo']
+#       if writers:
+#         episode.writers.clear()
+#         for writer in writers:
+#           meta_writer = episode.writers.new()
+#           if 'name' in writer:
+#             meta_writer.name = writer['name']
+#           if 'photo' in writer:
+#             meta_writer.photo = writer['photo']
+
+  # TV검색 > 회차
+  episode_href = html.xpath(u'//div[@class="c-section-tab"]//li/a[.="회차"]/@href')
+  for c in range(100):
+    if not episode_href:
+      break
+
+    # Log(episode_href[0])
+    # page = HTML.ElementFromURL('https://search.daum.net/search%s' % episode_href[0], sleep=0.5)
+    # ep = page.xpath('//option[@selected]/@value')[0]
+    # Log(ep)
+    # Log(page.xpath('//div[@class="box_story fold"]//text()[normalize-space()]'))
+    # Log(page.xpath('//strong[@class="tit_story"]/text()')[0])
+    # Log(page.xpath('//p[@class="desc_story"]/text()')[0])
+    # Log(page.xpath(u'//span[@class="screen_out" and text()="방영일"]/following-sibling::text()[normalize-space()]')[0])
+    # Log(page.xpath(u'//span[@class="screen_out" and text()="방영일"]/following-sibling::text()')[0])
+
     try:
-      episode_date = Datetime.ParseDate(a.xpath('./parent::li/@data-clip')[0]).date()
-    except: continue
+      # 2023.08.04.금
+      episode_date = Datetime.ParseDate(page.xpath(u'//span[text()="방영일"]/following-sibling::text()')[0][0:-1]).date()
+    except: break
     date_based_season_num = episode_date.year
     date_based_episode_num = episode_date.strftime('%Y-%m-%d')
-    episode_num = a.xpath(u'substring-before(./span[@class="txt_episode"],"회")')
+    episode_num = page.xpath(u'substring-before(//option[@selected]/@value,"회")')
+    episode_title = page.xpath('//strong[@class="tit_story"]/text()')
+    Log(episode_date)
+    Log(episode_num)
+    Log(episode_title)
     if episode_num:
       episode = (metadata_for('1', episode_num)
               or metadata_for(date_based_season_num, date_based_episode_num))
     else: # 응답하라 1988: 시청지도서
       episode = metadata_for(date_based_season_num, date_based_episode_num)
     if episode:
-      if episode.summary and (u'회차정보가 없습니다' not in episode.summary) and (u'줄거리 정보 준비 중입니다' not in episode.summary):
-        continue
-      page = HTML.ElementFromURL('https://search.daum.net/search' + a.get('href'), sleep=0.5)
-      subtitle = page.xpath('//p[@class="episode_desc"]/strong/text()')
-      episode.summary = '\n'.join(txt.strip() for txt in page.xpath('//p[@class="episode_desc"]/text()')).strip()
+      episode.summary = page.xpath('//p[@class="desc_story"]/text()')[0]
       episode.originally_available_at = episode_date
-      episode.title = subtitle[0] if subtitle else date_based_episode_num
+      episode.title = episode_title[0] if episode_title else date_based_episode_num
       episode.rating = None
 
-      if directors:
-        episode.directors.clear()
-        for director in directors:
-          meta_director = episode.directors.new()
-          if 'name' in director:
-            meta_director.name = director['name']
-          if 'photo' in director:
-            meta_director.photo = director['photo']
-      if writers:
-        episode.writers.clear()
-        for writer in writers:
-          meta_writer = episode.writers.new()
-          if 'name' in writer:
-            meta_writer.name = writer['name']
-          if 'photo' in writer:
-            meta_writer.photo = writer['photo']
+    episode_href = page.xpath(u'//div[@class="paging"]/a[span[.="이전 회차"]]/@href')
+
+    # for a in page.xpath('//ul[@class="list_popover"]//li/a'):
+    #   Log(a.text)
 
   #   # (5) fill missing info
   #   # if Prefs['override_tv_id'] != 'None':
