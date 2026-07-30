@@ -595,6 +595,9 @@ def updateDaumTV(metadata, media):
     if home and 'program.kbs.co.kr' in home[0]:
       # 카카오VOD > http://program.kbs.co.kr/2tv/drama/dramaspecial2018/pc/list.html?smenu=c2cc5a
       replay_url = home[0] + 'list.html?smenu=c2cc5a'
+    elif home and 'disneyplus.com' in home[0]:
+      # https://www.disneyplus.com/ko-kr/browse/entity-7d607023-2f51-40f8-9316-b554b7a05c41
+      replay_url = home[0]
     else:
       if metadata.studio and Regex('MBC|SBS|KBS|EBS').match(metadata.studio):
         Log.Debug('No replay URL for [%s] %s' % (metadata.studio, metadata.title))
@@ -993,6 +996,51 @@ def updateDaumTV(metadata, media):
               if Prefs['use_episode_thumbnail'] and thumb not in episode.thumbs:
                 episode.thumbs[thumb] = Proxy.Preview(HTTP.Request(thumb, cacheTime=0, sleep=0.5))
             except: pass
+
+        replay_extracted = True
+      except:
+        Log.Debug(''.join(traceback.format_exc()))
+
+    elif 'disneyplus.com' in replay_url:
+      try:
+        if '/browse/' not in replay_url:
+          try:
+            # https://www.disneyplus.com/ko-kr/series/a-shop-for-killers/6pcuvK0SUuHI
+            res = HTTP.Request(replay_url, follow_redirects=False).content
+          except Ex.HTTPError as e:
+            if e.code == 308: # Permanent Redirect
+              # => /ko-kr/browse/entity-7d607023-2f51-40f8-9316-b554b7a05c41
+              replay_url = urlparse.urljoin(replay_url, e.headers['location'])
+            else:
+              raise
+
+        # https://www.disneyplus.com/ko-kr/browse/entity-7d607023-2f51-40f8-9316-b554b7a05c41
+        page = HTML.ElementFromURL(replay_url)
+
+        match = Regex(u'시즌 ?(\d+)$').search(metadata.title)
+        season_num_expected = match.group(1) if match else '1'
+        
+        opt = page.xpath(u'//select[@id="season"]/option[text()="시즌 %s"]' % season_num_expected)[0]
+        if opt.get('selected') == None:
+          replay_url = urlparse.urljoin(replay_url, '?season=%s' % opt.get('value'))
+          page = HTML.ElementFromURL(replay_url)
+
+        for li in page.xpath('//section[@data-testid="episodesContent"]//li'):
+          try:
+            p = li.xpath('.//div[@data-testid="image-card-metadata"]/p')
+            season_num, episode_num, episode_title = Regex(u'시즌 (\d+): (\d+)회 (.*)').search(p[0].text).group(1, 2, 3)
+            # Log.Debug('S{} E{} {}, {}'.format(season_num, episode_num, episode_title, p[1].text))
+
+            episode = metadata.seasons['1'].episodes[episode_num]
+            episode.summary = p[1].text
+            episode.originally_available_at = metadata.originally_available_at
+            episode.title = episode_title
+            episode.rating = None
+
+            thumb = li.xpath('.//picture/source[1]/@srcset')[0].split(' ', 1)[0]
+            if Prefs['use_episode_thumbnail'] and thumb not in episode.thumbs:
+              episode.thumbs[thumb] = Proxy.Preview(HTTP.Request(thumb, cacheTime=0, sleep=0.5))
+          except: pass
 
         replay_extracted = True
       except:
